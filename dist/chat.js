@@ -10,9 +10,25 @@
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
   let messages = [], ready = false, sending = false;
   let apiBase = '', accessCode = '';
+  const sessionKey = 'atende.access.session.v1';
   const authBox = document.querySelector('#online-auth');
   const codeInput = document.querySelector('#access-code');
   const connectButton = document.querySelector('#connect-online');
+  function updateControls() {
+    input.disabled = sending;
+    send.disabled = sending;
+    send.textContent = sending ? 'Aguarde…' : (ready ? 'Enviar mensagem ↗' : 'Liberar envio ↗');
+  }
+  function rememberAccess() {
+    if (local) return;
+    try { sessionStorage.setItem(sessionKey, JSON.stringify({ code: accessCode, expiresAt: Date.now() + 8 * 60 * 60 * 1000 })); } catch {}
+  }
+  function forgetAccess() {
+    ready = false; accessCode = '';
+    try { sessionStorage.removeItem(sessionKey); } catch {}
+    authBox.hidden = false;
+    updateControls();
+  }
   async function apiRequest(path, options = {}) {
     const headers = { ...options.headers, 'X-Atende-Client': 'panel' };
     if (!local) headers.Authorization = 'Bearer ' + accessCode;
@@ -34,35 +50,47 @@
   }
   async function checkConnection() {
     if (!local && !apiBase) {
-      connection.textContent = 'A integração online está aguardando a publicação do servidor.';
+      connection.textContent = 'A conexão está carregando. Você já pode escrever sua mensagem.';
+      updateControls();
       return;
     }
     if (!local && !accessCode) {
       authBox.hidden = false;
-      connection.textContent = 'Servidor online disponível. Informe seu código privado para habilitar o atendimento.';
+      connection.textContent = 'Você já pode escrever abaixo. Para enviar à IA, informe o código de acesso e clique em Conectar IA online.';
+      updateControls();
       return;
     }
     try {
       const response = await apiRequest('/api/status');
       if (!response.ok) {
-        ready = false; input.disabled = send.disabled = true;
+        ready = false; updateControls();
+        if (response.status === 401 && !local) forgetAccess();
         const failure = await response.json();
         throw new Error(failure.error || 'Não foi possível conectar.');
       }
       const state = await response.json(); ready = state.configured === true;
-      input.disabled = send.disabled = !ready;
+      updateControls();
       connection.textContent = ready ? `Servidor configurado · ${state.model}. A chave será validada pela OpenAI ao enviar a primeira mensagem.` : 'Servidor disponível, mas falta configurar a chave da OpenAI.';
       showUsage(state);
       if (ready) {
         const channel = document.querySelector('[data-panel="channels"] .connection-state');
         channel.textContent = local ? 'Configurado localmente' : 'Servidor online conectado';
-        if (!local) { authBox.hidden = true; codeInput.value = ''; }
+        if (!local) { rememberAccess(); authBox.hidden = true; codeInput.value = ''; }
       }
-    } catch (error) { connection.textContent = error.message || 'Servidor de IA indisponível.'; if (!local) authBox.hidden = false; }
+    } catch (error) { ready = false; updateControls(); connection.textContent = error.message || 'Servidor de IA indisponível.'; if (!local) authBox.hidden = false; }
   }
   send.addEventListener('click', async () => {
     const text = input.value.trim();
-    if (!ready || sending || !text) return;
+    if (sending) return;
+    if (!ready) {
+      await checkConnection();
+      if (!ready) {
+        feedback.textContent = local ? 'Conecte o servidor para enviar. Sua mensagem continua no campo.' : 'Falta liberar o acesso à IA. Informe o código no campo destacado acima. Sua mensagem continua salva no campo.';
+        if (!local) { authBox.hidden = false; authBox.scrollIntoView({block:'center', behavior:'smooth'}); codeInput.focus({preventScroll:true}); }
+        return;
+      }
+    }
+    if (!text) { feedback.textContent = 'Escreva uma mensagem para enviar à IA.'; input.focus(); return; }
     if (messages.length >= 12) { feedback.textContent = 'Comece uma nova conversa para continuar o teste.'; return; }
     if (text.length > 2000) { feedback.textContent = 'Use até 2.000 caracteres por mensagem.'; return; }
     const pending = [...messages, { role: 'user', content: text }];
@@ -70,7 +98,7 @@
     try {
       const response = await apiRequest('/api/chat', { method: 'POST', signal: AbortSignal.timeout(55000), headers: { 'Content-Type': 'application/json', 'X-Atende-Client': 'panel' }, body: JSON.stringify({ settings: settings(), messages: pending }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Não foi possível gerar a resposta.');
+      if (!response.ok) { if (response.status === 401 && !local) forgetAccess(); throw new Error(result.error || 'Não foi possível gerar a resposta.'); }
       if (typeof result.reply !== 'string') throw new Error('Resposta inválida do servidor.');
       messages = [...pending, { role: 'assistant', content: result.reply }];
       addMessage('user', text); addMessage('assistant', result.reply); input.value = '';
@@ -78,7 +106,7 @@
       connection.textContent = 'Conexão com a OpenAI validada nesta sessão. Atendimento ' + (local ? 'local' : 'online') + ' ativo.';
     } catch (error) { feedback.textContent = error.name === 'TimeoutError' ? 'O servidor demorou para responder. Aguarde antes de tentar novamente; a chamada pode ter consumido créditos.' : error.message; }
     finally {
-      sending = false; send.disabled = input.disabled = !ready; clear.disabled = false;
+      sending = false; updateControls(); clear.disabled = false;
       apiRequest('/api/status').then(response => response.ok ? response.json() : null).then(state => { if (state) showUsage(state); }).catch(() => {});
     }
   });
@@ -94,6 +122,7 @@
     try { await checkConnection(); } finally { connectButton.disabled = false; }
   });
   codeInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); connectButton.click(); } });
+  updateControls();
   (async () => {
     if (!local) {
       try {
@@ -104,6 +133,11 @@
           const url = new URL(config.apiBase);
           if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Endereço de servidor inválido.');
           apiBase = url.origin;
+          try {
+            const savedAccess = JSON.parse(sessionStorage.getItem(sessionKey) || 'null');
+            if (savedAccess && typeof savedAccess.code === 'string' && savedAccess.code.length <= 256 && savedAccess.expiresAt > Date.now()) accessCode = savedAccess.code;
+            else sessionStorage.removeItem(sessionKey);
+          } catch {}
         }
       } catch { connection.textContent = 'Não foi possível carregar a configuração online. Recarregue a página.'; return; }
     }

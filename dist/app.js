@@ -52,3 +52,5 @@ form.addEventListener('submit', event => {
 });
 updatePreview();
 setTab(location.hash.slice(1) || 'assistant');
+
+window.addEventListener('hashchange', () => setTab(location.hash.slice(1) || 'assistant'));

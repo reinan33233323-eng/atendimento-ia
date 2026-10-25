@@ -30,7 +30,7 @@ Execute `npm test` para testar validação, composição das instruções e trat
 
 A interface pública usa o servidor Cloudflare Worker definido em `wrangler.jsonc`. O endereço público do servidor fica em `dist/runtime-config.json`; esse arquivo nunca contém segredos.
 
-A chave OpenAI fica no segredo `OPENAI_API_KEY` do Worker. O código privado do painel fica em `PANEL_ACCESS_TOKEN`. O visitante precisa informar esse código na aba Testar atendimento. O código fica apenas na memória da aba, sem localStorage ou URL. Recarregar a página exige informá-lo de novo.
+A chave OpenAI fica no segredo `OPENAI_API_KEY` do Worker. O código privado do painel fica em `PANEL_ACCESS_TOKEN`. O visitante precisa informar esse código na aba Testar atendimento. O código é guardado em sessionStorage nesta aba por até oito horas, sem localStorage ou URL. Recarregar preserva o acesso; o código não é compartilhado entre navegadores.
 
 O servidor valida o código, restringe CORS à origem do Pages, valida o tamanho das mensagens e usa um Durable Object para persistir as quotas: 5 chamadas por minuto de calendário, 30/dia e 200/mês, em UTC. As tentativas contam antes de chamar a OpenAI, inclusive em falhas. Essas quotas são separadas das do servidor local. A quota de chamadas não representa um teto financeiro em reais.
 
