@@ -1,0 +1,14 @@
+{
+  "name": "atendimento-ia-api",
+  "main": "backend/worker.mjs",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "vars": {
+    "OPENAI_MODEL": "gpt-6-luna",
+    "ALLOWED_ORIGIN": "https://reinan33233323-eng.github.io"
+  },
+  "durable_objects": {
+    "bindings": [{"name": "QUOTA", "class_name": "TestQuota"}]
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["TestQuota"]}]
+}

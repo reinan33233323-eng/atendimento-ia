@@ -26,11 +26,21 @@ Esses limites são de chamadas, não garantem um teto financeiro em reais. O or�
 
 Execute `npm test` para testar validação, composição das instruções e tratamento de respostas/erros sem chamadas pagas.
 
+## IA no GitHub Pages
+
+A interface pública usa o servidor Cloudflare Worker definido em `wrangler.jsonc`. O endereço público do servidor fica em `dist/runtime-config.json`; esse arquivo nunca contém segredos.
+
+A chave OpenAI fica no segredo `OPENAI_API_KEY` do Worker. O código privado do painel fica em `PANEL_ACCESS_TOKEN`. O visitante precisa informar esse código na aba Testar atendimento. O código fica apenas na memória da aba, sem localStorage ou URL. Recarregar a página exige informá-lo de novo.
+
+O servidor valida o código, restringe CORS à origem do Pages, valida o tamanho das mensagens e usa um Durable Object para persistir as quotas: 5 chamadas por minuto de calendário, 30/dia e 200/mês, em UTC. As tentativas contam antes de chamar a OpenAI, inclusive em falhas. Essas quotas são separadas das do servidor local. A quota de chamadas não representa um teto financeiro em reais.
+
+Para atualizar a API, execute `npx wrangler@4 deploy` na conta correta da Cloudflare. O workflow do GitHub publica apenas a interface, sem alterar o Worker. Nunca cadastre segredos em `wrangler.jsonc` nem nos arquivos de `dist`.
+
 ## Limites atuais
 
-O servidor de IA funciona localmente. Ainda não existe servidor de produção, login online, conexão com WhatsApp, cobrança integrada ou trava financeira por orçamento. Os dados não são sincronizados entre dispositivos. A prévia de apresentação continua estática; a conversa real fica na aba Testar atendimento quando aberta pelo servidor local.
+O chat real funciona localmente e no Pages através do Worker. O acesso online usa um código privado compartilhado; ainda não há contas individuais, conexão com WhatsApp, cobrança integrada ou trava financeira por orçamento. Os dados da empresa continuam salvos no navegador e não são sincronizados entre dispositivos. A prévia de apresentação continua estática; a conversa real fica na aba Testar atendimento.
 
-O GitHub Pages hospeda a interface estática e não acessa este servidor local. Para disponibilizar a IA no endereço público, será necessário hospedar um backend com autenticação, segredos de produção, limites duráveis e CORS para a origem correta. Não exponha este servidor de desenvolvimento na internet. Chaves nunca devem entrar nos arquivos públicos nem no localStorage.
+O Pages acessa apenas o Worker online, sem depender do computador ligado. Não exponha o servidor local de desenvolvimento na internet. Chaves nunca devem entrar nos arquivos públicos nem no localStorage.
 
 ## Desenvolvimento
 
