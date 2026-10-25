@@ -2,6 +2,7 @@ const form = document.querySelector('#settings-form');
 const storageKey = 'atende.settings.v1';
 const stateLabel = document.querySelector('#save-state');
 const tabs = {
+  test: ['Testar atendimento', 'A primeira conversa.<br>Agora com o seu assistente.', 'Teste as respostas antes de colocar o atendimento em operação.'],
   assistant: ['Meu assistente', 'Seu próximo bom atendimento<br>começa com uma boa conversa.', 'Configure a personalidade do seu assistente e deixe a sua marca em cada resposta.'],
   knowledge: ['Conhecimento', 'O seu negócio.<br>Na ponta da conversa.', 'Organize as informações que vão orientar o atendimento.'],
   channels: ['Canais e conexões', 'Cada conexão abre<br>uma nova conversa.', 'Prepare os canais que vão aproximar a sua empresa dos clientes.'],
@@ -36,7 +37,7 @@ try {
   }
 } catch { stateLabel.textContent = 'Não foi possível recuperar as configurações locais.'; }
 document.querySelectorAll('[data-tab], [data-go]').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab || button.dataset.go)));
-form.addEventListener('input', () => { updatePreview(); stateLabel.textContent = 'Você tem alterações para salvar.'; });
+form.addEventListener('input', event => { if (!event.target.name) return; updatePreview(); stateLabel.textContent = 'Você tem alterações para salvar.'; });
 let toastTimer;
 form.addEventListener('submit', event => {
   event.preventDefault();
