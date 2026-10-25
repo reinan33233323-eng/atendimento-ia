@@ -119,7 +119,7 @@
     accessCode = codeInput.value.trim();
     if (!accessCode) { connection.textContent = 'Preencha o código de acesso.'; return; }
     connectButton.disabled = true;
-    try { await checkConnection(); } finally { connectButton.disabled = false; }
+    try { await checkConnection(); if (ready) feedback.textContent = 'Acesso liberado. Você já pode enviar sua mensagem.'; } finally { connectButton.disabled = false; }
   });
   codeInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); connectButton.click(); } });
   updateControls();
