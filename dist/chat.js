@@ -38,10 +38,29 @@
     updateCostPanel(state);
     usageLabel.textContent = `${state.usage.daily}/${state.limits.perDay} chamadas hoje · ${state.usage.monthly}/${state.limits.perMonth} no mês. Falhas também contam no limite. Períodos em UTC. O valor em reais do painel ainda não é uma trava de cobrança.`;
   }
+  let latestCostState = null;
+  const rateField = document.querySelector('#exchange-rate');
+  try {
+    const savedRate = Number(localStorage.getItem('atende.exchangeRate'));
+    if (savedRate >= 0.01 && savedRate <= 1000) rateField.value = String(savedRate);
+  } catch {}
+  function renderMoney(state) {
+    const rate = Number(rateField.value);
+    const valid = Number.isFinite(rate) && rate >= 0.01 && rate <= 1000;
+    const amount = state?.estimate?.amount;
+    document.querySelector('#cost-estimate').textContent = !valid ? 'Ajuste a cotação' : typeof amount === 'number' ? new Intl.NumberFormat('pt-BR', {style:'currency',currency:'BRL',minimumFractionDigits:6,maximumFractionDigits:6}).format(amount * rate) : '—';
+    document.querySelector('#cost-conversion-note').textContent = valid && typeof amount === 'number' ? 'Base: US$ ' + amount.toFixed(6).replace('.', ',') + ' × R$ ' + rate.toLocaleString('pt-BR', {minimumFractionDigits:2,maximumFractionDigits:2}) : 'BRL · estimativa dos tokens registrados';
+  }
+  rateField.addEventListener('input', () => {
+    const rate = Number(rateField.value);
+    if (rate >= 0.01 && rate <= 1000) { try { localStorage.setItem('atende.exchangeRate', String(rate)); } catch {} }
+    renderMoney(latestCostState);
+  });
   function updateCostPanel(state) {
+    latestCostState = state;
+    renderMoney(state);
     const number = value => new Intl.NumberFormat('pt-BR').format(value || 0);
     const usage = state.usage;
-    document.querySelector('#cost-estimate').textContent = state.estimate ? new Intl.NumberFormat('pt-BR', {style:'currency',currency:'USD',minimumFractionDigits:6,maximumFractionDigits:6}).format(state.estimate.amount) : 'Não disponível';
     document.querySelector('#usage-calls').textContent = number(usage.monthly);
     document.querySelector('#usage-tokens').textContent = number((usage.input_tokens || 0) + (usage.output_tokens || 0));
     document.querySelector('#usage-input').textContent = number(usage.input_tokens);
