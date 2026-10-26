@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { ApiError, prepareRequest, askOpenAI } from './openai.mjs';
+import { estimateUsage } from './costs.mjs';
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const stateDir = fileURLToPath(new URL('../.runtime/', import.meta.url));
 const port = Number(process.env.PORT || 4174);
@@ -19,7 +20,7 @@ if (!ledger || !Number.isFinite(ledger.daily) || !Number.isFinite(ledger.monthly
 const persist = () => writeFile(resolve(stateDir, 'usage.json'), JSON.stringify(ledger), { mode: 0o600 });
 function rollPeriod() {
   const day = new Date().toISOString().slice(0, 10), month = day.slice(0, 7);
-  if (ledger.month !== month) Object.assign(ledger, { month, monthly: 0, input_tokens: 0, output_tokens: 0 });
+  if (ledger.month !== month) Object.assign(ledger, { month, monthly: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 });
   if (ledger.day !== day) Object.assign(ledger, { day, daily: 0 });
 }
 function json(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); }
@@ -40,7 +41,7 @@ const server = createServer(async (req, res) => {
       if (req.headers['x-atende-client'] !== 'panel') throw new ApiError(403, 'Acesse a API pelo painel local.');
       if (url.pathname === '/api/status' && req.method === 'GET') {
         rollPeriod();
-        return json(res, 200, { configured: !!apiKey, mode: 'local', model, limits: { perMinute: 5, perDay: 30, perMonth: 200 }, usage: ledger });
+        return json(res, 200, { configured: !!apiKey, mode: 'local', model, limits: { perMinute: 5, perDay: 30, perMonth: 200 }, usage: ledger, estimate: estimateUsage(ledger, model) });
       }
       if (url.pathname !== '/api/chat') throw new ApiError(404, 'Rota não encontrada.');
       if (req.method !== 'POST') throw new ApiError(405, 'Método não permitido.');
@@ -56,6 +57,7 @@ const server = createServer(async (req, res) => {
         await persist(); // Reserve before calling the provider; failures count toward the cap.
         const result = await askOpenAI(payload, { apiKey });
         ledger.input_tokens += result.usage.input_tokens; ledger.output_tokens += result.usage.output_tokens;
+        ledger.cached_input_tokens = (ledger.cached_input_tokens || 0) + (result.usage.cached_input_tokens || 0);
         await persist();
         return json(res, 200, result);
       } finally { busy = false; }

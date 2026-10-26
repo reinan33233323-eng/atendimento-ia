@@ -1,4 +1,5 @@
 import { ApiError, prepareRequest, askOpenAI } from './openai.mjs';
+import { estimateUsage } from './costs.mjs';
 const limits = { perMinute: 5, perDay: 30, perMonth: 200 };
 const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...extra } });
 export async function matchesToken(provided, expected) {
@@ -16,7 +17,7 @@ export class TestQuota {
     return this.ctx.storage.transaction(async transaction => {
       const now = new Date(), day = now.toISOString().slice(0, 10), month = day.slice(0, 7), minute = Math.floor(now.getTime() / 60000);
       const state = await transaction.get('usage') || { month, day, minute, monthly: 0, daily: 0, recent: 0, input_tokens: 0, output_tokens: 0 };
-      if (state.month !== month) Object.assign(state, { month, monthly: 0, input_tokens: 0, output_tokens: 0 });
+      if (state.month !== month) Object.assign(state, { month, monthly: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 });
       if (state.day !== day) Object.assign(state, { day, daily: 0 });
       if (state.minute !== minute) Object.assign(state, { minute, recent: 0 });
       if (action === '/reserve') {
@@ -24,6 +25,7 @@ export class TestQuota {
         state.recent++; state.daily++; state.monthly++;
       } else if (action === '/record') {
         state.input_tokens += usage.input_tokens || 0; state.output_tokens += usage.output_tokens || 0;
+        state.cached_input_tokens = (state.cached_input_tokens || 0) + (usage.cached_input_tokens || 0);
       }
       await transaction.put('usage', state);
       return json(state);
@@ -43,7 +45,10 @@ export default {
       if (token.length > 256 || !await matchesToken(token, env.PANEL_ACCESS_TOKEN)) throw new ApiError(401, 'Informe o código de acesso do atendimento.');
       const quota = env.QUOTA.get(env.QUOTA.idFromName('panel'));
       const path = new URL(request.url).pathname;
-      if (path === '/api/status' && request.method === 'GET') return json({ configured: true, mode: 'online', model: env.OPENAI_MODEL, limits, usage: await (await quota.fetch('https://quota/status')).json() }, 200, cors);
+      if (path === '/api/status' && request.method === 'GET') {
+        const usage = await (await quota.fetch('https://quota/status')).json();
+        return json({ configured: true, mode: 'online', model: env.OPENAI_MODEL, limits, usage, estimate: estimateUsage(usage, env.OPENAI_MODEL) }, 200, cors);
+      }
       if (path !== '/api/chat') throw new ApiError(404, 'Rota não encontrada.');
       if (request.method !== 'POST') throw new ApiError(405, 'Método não permitido.');
       if (!(request.headers.get('Content-Type') || '').startsWith('application/json')) throw new ApiError(415, 'Envie o conteúdo em JSON.');

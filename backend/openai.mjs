@@ -49,5 +49,5 @@ export async function askOpenAI(payload, { apiKey, fetchImpl = fetch }) {
   try { result = await response.json(); } catch { throw new ApiError(502, 'A OpenAI retornou uma resposta inválida.'); }
   const reply = (result.output || []).filter(item => item.type === 'message').flatMap(item => item.content || []).filter(item => item.type === 'output_text').map(item => item.text).join('\n').trim();
   if (!reply) throw new ApiError(502, 'A IA não retornou texto. Tente uma pergunta mais curta.');
-  return { reply, model: result.model || payload.model, usage: { input_tokens: result.usage?.input_tokens || 0, output_tokens: result.usage?.output_tokens || 0 } };
+  return { reply, model: result.model || payload.model, usage: { input_tokens: result.usage?.input_tokens || 0, output_tokens: result.usage?.output_tokens || 0, cached_input_tokens: result.usage?.input_tokens_details?.cached_tokens || 0 } };
 }

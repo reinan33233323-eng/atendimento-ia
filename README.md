@@ -49,3 +49,7 @@ Sem instalação ou etapa de build. Sirva a pasta `dist` com um servidor HTTP lo
 ## Publicação
 
 O workflow `.github/workflows/pages.yml` publica `dist` a cada push na branch `main`. Em Settings → Pages, a origem deve ser GitHub Actions.
+
+## Custos no painel
+
+A aba Custos e limites consulta o consumo autenticado do mesmo servidor usado no chat. Exibe chamadas e tokens do mês UTC, além de uma estimativa em USD para o modelo configurado. A fórmula aplica a tarifa padrão verificada em 25/10/2026 e desconta os tokens de cache registrados após a atualização. Registros antigos sem cache usam entrada normal. A estimativa não é uma fatura, não informa o saldo da conta, não inclui outros aplicativos, câmbio, impostos, hospedagem ou WhatsApp. O saldo e a cobrança oficial são consultados pelo link da OpenAI na tela.

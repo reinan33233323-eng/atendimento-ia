@@ -35,8 +35,34 @@
     return fetch(apiBase + path, { ...options, headers, credentials: 'omit' });
   }
   function showUsage(state) {
+    updateCostPanel(state);
     usageLabel.textContent = `${state.usage.daily}/${state.limits.perDay} chamadas hoje · ${state.usage.monthly}/${state.limits.perMonth} no mês. Falhas também contam no limite. Períodos em UTC. O valor em reais do painel ainda não é uma trava de cobrança.`;
   }
+  function updateCostPanel(state) {
+    const number = value => new Intl.NumberFormat('pt-BR').format(value || 0);
+    const usage = state.usage;
+    document.querySelector('#cost-estimate').textContent = state.estimate ? new Intl.NumberFormat('pt-BR', {style:'currency',currency:'USD',minimumFractionDigits:6,maximumFractionDigits:6}).format(state.estimate.amount) : 'Não disponível';
+    document.querySelector('#usage-calls').textContent = number(usage.monthly);
+    document.querySelector('#usage-tokens').textContent = number((usage.input_tokens || 0) + (usage.output_tokens || 0));
+    document.querySelector('#usage-input').textContent = number(usage.input_tokens);
+    document.querySelector('#usage-output').textContent = number(usage.output_tokens);
+    document.querySelector('#usage-cache').textContent = number(usage.cached_input_tokens);
+    document.querySelector('#usage-daily').textContent = number(usage.daily) + ' / ' + state.limits.perDay;
+    document.querySelector('#usage-limit').textContent = state.limits.perMonth + ' chamadas';
+    document.querySelector('#usage-model').textContent = state.model;
+    document.querySelector('#cost-status').textContent = 'Mês ' + usage.month + ' · ambiente ' + (state.mode === 'online' ? 'online' : 'local') + ' · atualizado às ' + new Date().toLocaleTimeString('pt-BR') + '. Período em UTC.';
+  }
+  async function refreshCosts() {
+    const status = document.querySelector('#cost-status');
+    if (!ready) { status.textContent = 'Libere o acesso na aba Testar atendimento para consultar o consumo privado.'; return; }
+    try {
+      const response = await apiRequest('/api/status');
+      if (!response.ok) throw new Error('Não foi possível atualizar. Verifique o acesso na aba de teste.');
+      showUsage(await response.json());
+    } catch(error) { status.textContent = error.message; }
+  }
+  document.querySelector('#refresh-usage').addEventListener('click', refreshCosts);
+  document.querySelector('[data-tab="budget"]').addEventListener('click', refreshCosts);
   const settingsNames = ['assistantName', 'companyName', 'greeting', 'tone', 'instructions', 'handoff', 'services', 'hours', 'contact', 'faq'];
   function settings() {
     return Object.fromEntries(settingsNames.map(name => [name, configForm.elements[name].type === 'checkbox' ? configForm.elements[name].checked : configForm.elements[name].value]));
