@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { ApiError, prepareRequest, askOpenAI } from './openai.mjs';
+import { MAX_AUDIO_BYTES, validateAudio, transcribeAudio } from './audio.mjs';
 import { estimateUsage } from './costs.mjs';
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const stateDir = fileURLToPath(new URL('../.runtime/', import.meta.url));
@@ -20,14 +21,16 @@ if (!ledger || !Number.isFinite(ledger.daily) || !Number.isFinite(ledger.monthly
 const persist = () => writeFile(resolve(stateDir, 'usage.json'), JSON.stringify(ledger), { mode: 0o600 });
 function rollPeriod() {
   const day = new Date().toISOString().slice(0, 10), month = day.slice(0, 7);
-  if (ledger.month !== month) Object.assign(ledger, { month, monthly: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 });
+  if (ledger.month !== month) Object.assign(ledger, { month, monthly: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, audio_input_tokens: 0, audio_output_tokens: 0, audio_transcriptions: 0 });
   if (ledger.day !== day) Object.assign(ledger, { day, daily: 0 });
 }
 function json(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); }
-async function readBody(req) {
-  if (!(req.headers['content-type'] || '').startsWith('application/json')) throw new ApiError(415, 'Envie o conteúdo em JSON.');
+async function readBody(req, audio = false) {
+  if (audio) validateAudio(req.headers['content-type'], 1);
+  if (!audio && !(req.headers['content-type'] || '').startsWith('application/json')) throw new ApiError(415, 'Envie o conteúdo em JSON.');
   const chunks = []; let bytes = 0;
-  for await (const chunk of req) { bytes += chunk.length; if (bytes > 100000) throw new ApiError(413, 'Conteúdo muito grande.'); chunks.push(chunk); }
+  for await (const chunk of req) { bytes += chunk.length; if (bytes > (audio ? MAX_AUDIO_BYTES : 100000)) throw new ApiError(413, 'Conteúdo muito grande.'); chunks.push(chunk); }
+  if (audio) { validateAudio(req.headers['content-type'], bytes); return Buffer.concat(chunks); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new ApiError(400, 'JSON inválido.'); }
 }
 const server = createServer(async (req, res) => {
@@ -43,10 +46,12 @@ const server = createServer(async (req, res) => {
         rollPeriod();
         return json(res, 200, { configured: !!apiKey, mode: 'local', model, limits: { perMinute: 5, perDay: 30, perMonth: 200 }, usage: ledger, estimate: estimateUsage(ledger, model) });
       }
-      if (url.pathname !== '/api/chat') throw new ApiError(404, 'Rota não encontrada.');
+      const audio = url.pathname === '/api/transcribe';
+      if (url.pathname !== '/api/chat' && !audio) throw new ApiError(404, 'Rota não encontrada.');
       if (req.method !== 'POST') throw new ApiError(405, 'Método não permitido.');
       if (!apiKey) throw new ApiError(503, 'Configure a chave da OpenAI no servidor antes de conversar.');
-      const payload = prepareRequest(await readBody(req), model);
+      const body = await readBody(req, audio);
+      const payload = audio ? body : prepareRequest(body, model);
       if (busy) throw new ApiError(429, 'Aguarde a resposta anterior antes de enviar outra mensagem.');
       busy = true;
       try {
@@ -55,8 +60,9 @@ const server = createServer(async (req, res) => {
         if (attempts.length >= 5 || ledger.daily >= 30 || ledger.monthly >= 200) throw new ApiError(429, 'Limite de testes atingido: 5 chamadas/minuto, 30/dia ou 200/mês.');
         attempts.push(now); ledger.daily++; ledger.monthly++;
         await persist(); // Reserve before calling the provider; failures count toward the cap.
-        const result = await askOpenAI(payload, { apiKey });
-        ledger.input_tokens += result.usage.input_tokens; ledger.output_tokens += result.usage.output_tokens;
+        const result = audio ? await transcribeAudio(payload, req.headers['content-type'], { apiKey }) : await askOpenAI(payload, { apiKey });
+        for (const key of ['audio_input_tokens', 'audio_output_tokens', 'audio_transcriptions']) ledger[key] = (ledger[key] || 0) + (result.usage[key] || 0);
+        ledger.input_tokens += result.usage.input_tokens || 0; ledger.output_tokens += result.usage.output_tokens || 0;
         ledger.cached_input_tokens = (ledger.cached_input_tokens || 0) + (result.usage.cached_input_tokens || 0);
         await persist();
         return json(res, 200, result);

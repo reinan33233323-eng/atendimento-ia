@@ -10,13 +10,28 @@
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
   let messages = [], ready = false, sending = false;
   let apiBase = '', accessCode = '';
+  let audioBusy = false, recorder = null, stream = null, recording = false, recordingTimer = null;
+  let audioBlob = null, audioUrl = null;
+  const recordAudio = document.querySelector('#record-audio');
+  const attachAudio = document.querySelector('#attach-audio');
+  const audioFile = document.querySelector('#audio-file');
+  const audioStatus = document.querySelector('#audio-status');
+  const audioPreview = document.querySelector('#audio-preview');
+  const audioPlayer = document.querySelector('#audio-player');
+  const sendAudio = document.querySelector('#send-audio');
+  const discardAudio = document.querySelector('#discard-audio');
   const sessionKey = 'atende.access.session.v1';
   const authBox = document.querySelector('#online-auth');
   const codeInput = document.querySelector('#access-code');
   const connectButton = document.querySelector('#connect-online');
   function updateControls() {
-    input.disabled = sending;
-    send.disabled = sending;
+    input.disabled = sending || audioBusy || recording;
+    send.disabled = sending || audioBusy || recording;
+    clear.disabled = sending || audioBusy || recording;
+    attachAudio.disabled = sending || audioBusy || recording;
+    recordAudio.disabled = sending || audioBusy;
+    sendAudio.disabled = sending || audioBusy || recording || !audioBlob;
+    discardAudio.disabled = sending || audioBusy || recording;
     send.textContent = sending ? 'Aguarde…' : (ready ? 'Enviar mensagem ↗' : 'Liberar envio ↗');
   }
   function rememberAccess() {
@@ -126,7 +141,7 @@
   }
   send.addEventListener('click', async () => {
     const text = input.value.trim();
-    if (sending) return;
+    if (sending || audioBusy || recording) return;
     if (!ready) {
       await checkConnection();
       if (!ready) {
@@ -139,7 +154,7 @@
     if (messages.length >= 12) { feedback.textContent = 'Comece uma nova conversa para continuar o teste.'; return; }
     if (text.length > 2000) { feedback.textContent = 'Use até 2.000 caracteres por mensagem.'; return; }
     const pending = [...messages, { role: 'user', content: text }];
-    sending = true; send.disabled = clear.disabled = input.disabled = true; feedback.textContent = 'O assistente está respondendo…';
+    sending = true; updateControls(); feedback.textContent = 'O assistente está respondendo…';
     try {
       const response = await apiRequest('/api/chat', { method: 'POST', signal: AbortSignal.timeout(55000), headers: { 'Content-Type': 'application/json', 'X-Atende-Client': 'panel' }, body: JSON.stringify({ settings: settings(), messages: pending }) });
       const result = await response.json();
@@ -156,8 +171,70 @@
     }
   });
   clear.addEventListener('click', () => {
-    messages = []; log.replaceChildren(); const empty = document.createElement('p'); empty.className = 'empty-chat'; empty.textContent = 'Nova conversa. Faça uma pergunta para testar o atendimento.'; log.append(empty); feedback.textContent = ''; input.value = '';
+    resetAudio(); messages = []; log.replaceChildren(); const empty = document.createElement('p'); empty.className = 'empty-chat'; empty.textContent = 'Nova conversa. Faça uma pergunta para testar o atendimento.'; log.append(empty); feedback.textContent = ''; input.value = '';
   });
+  function resetAudio() {
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioBlob = null; audioUrl = null; audioFile.value = ''; audioPlayer.removeAttribute('src'); audioPlayer.load(); audioPreview.hidden = true;
+    updateControls();
+  }
+  function previewAudio(blob) {
+    if (!blob.size || blob.size > 8 * 1024 * 1024) { audioStatus.textContent = 'Escolha um áudio com conteúdo e no máximo 8 MB.'; return; }
+    resetAudio(); audioBlob = blob; audioUrl = URL.createObjectURL(blob); audioPlayer.src = audioUrl; audioPreview.hidden = false;
+    audioStatus.textContent = 'Áudio pronto. Ouça a prévia e clique em Enviar áudio.'; updateControls();
+  }
+  function stopRecording() {
+    if (recorder?.state === 'recording') recorder.stop();
+    stream?.getTracks().forEach(track => track.stop()); stream = null;
+    clearTimeout(recordingTimer); recording = false; recordAudio.classList.remove('recording'); recordAudio.textContent = '◉ Gravar áudio'; updateControls();
+  }
+  recordAudio.addEventListener('click', async () => {
+    if (recording) { stopRecording(); return; }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { audioStatus.textContent = 'Este navegador não permite gravar aqui. Use Anexar áudio ou abra no Chrome/Safari.'; return; }
+    audioBusy = true; updateControls();
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type));
+      recorder = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
+      const chunks = [];
+      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+      recorder.onerror = () => { audioStatus.textContent = 'Não foi possível gravar. Tente anexar um arquivo.'; stopRecording(); };
+      recorder.onstop = () => { const type = recorder.mimeType; stopRecording(); previewAudio(new Blob(chunks, {type})); };
+      recorder.start(); recording = true; recordAudio.textContent = '■ Parar gravação'; recordAudio.classList.add('recording');
+      audioStatus.textContent = 'Gravando… clique em Parar gravação quando terminar (máximo 2 minutos).';
+      recordingTimer = setTimeout(stopRecording, 120000);
+    } catch (error) {
+      stream?.getTracks().forEach(track => track.stop()); stream = null;
+      audioStatus.textContent = error.name === 'NotAllowedError' ? 'O microfone não foi autorizado. Libere a permissão no navegador ou use Anexar áudio.' : 'Microfone indisponível. Use Anexar áudio.';
+    } finally { audioBusy = false; updateControls(); }
+  });
+  attachAudio.addEventListener('click', () => audioFile.click());
+  audioFile.addEventListener('change', () => {
+    const file = audioFile.files[0]; if (!file) return;
+    const types = {mp3:'audio/mpeg',mp4:'audio/mp4',m4a:'audio/mp4',wav:'audio/wav',ogg:'audio/ogg',webm:'audio/webm',flac:'audio/flac'};
+    const type = types[file.name.split('.').pop().toLowerCase()] || file.type;
+    if (!Object.values(types).includes(type)) { audioStatus.textContent = 'Use um arquivo MP3, M4A, MP4, WAV, OGG, FLAC ou WebM.'; audioFile.value = ''; return; }
+    previewAudio(new Blob([file], {type}));
+  });
+  discardAudio.addEventListener('click', () => { resetAudio(); audioStatus.textContent = 'Áudio descartado. Você pode gravar ou anexar outro.'; });
+  sendAudio.addEventListener('click', async () => {
+    if (!audioBlob || sending || audioBusy || recording) return;
+    if (input.value.trim()) { audioStatus.textContent = 'Envie ou apague o texto no campo antes de enviar o áudio.'; return; }
+    if (!ready) { await checkConnection(); if (!ready) { audioStatus.textContent = 'Conecte a IA com o código de acesso antes de enviar o áudio.'; return; } }
+    if (messages.length >= 12) { audioStatus.textContent = 'Comece uma nova conversa antes de enviar o áudio.'; return; }
+    audioBusy = true; updateControls(); audioStatus.textContent = 'Ouvindo e transcrevendo o áudio…';
+    let transcribed = false;
+    try {
+      const response = await apiRequest('/api/transcribe', {method:'POST', headers:{'Content-Type':audioBlob.type}, body:audioBlob, signal:AbortSignal.timeout(55000)});
+      const result = await response.json();
+      if (!response.ok) { if (response.status === 401 && !local) forgetAccess(); throw new Error(result.error || 'Não foi possível transcrever.'); }
+      if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('Não foi possível identificar fala.');
+      input.value = result.text; resetAudio(); audioStatus.textContent = 'Áudio transcrito. A resposta aparece na conversa.'; transcribed = true;
+    } catch (error) { audioStatus.textContent = error.name === 'TimeoutError' ? 'A transcrição demorou. Aguarde antes de tentar novamente; pode ter consumido créditos.' : error.message; }
+    finally { audioBusy = false; updateControls(); refreshCosts(); }
+    if (transcribed) send.click();
+  });
+  window.addEventListener('pagehide', () => { stopRecording(); if (audioUrl) URL.revokeObjectURL(audioUrl); });
   input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send.click(); } });
   configForm.addEventListener('submit', event => { if (event.submitter?.id === 'send-chat') event.preventDefault(); });
   connectButton.addEventListener('click', async () => {

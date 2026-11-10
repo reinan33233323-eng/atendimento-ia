@@ -53,3 +53,9 @@ O workflow `.github/workflows/pages.yml` publica `dist` a cada push na branch `m
 ## Custos no painel
 
 A aba Custos e limites consulta o consumo autenticado do mesmo servidor usado no chat. Exibe chamadas e tokens do mês UTC, além de uma estimativa em USD para o modelo configurado. A fórmula aplica a tarifa padrão verificada em 25/10/2026 e desconta os tokens de cache registrados após a atualização. Registros antigos sem cache usam entrada normal. A estimativa não é uma fatura, não informa o saldo da conta, não inclui outros aplicativos, câmbio, impostos, hospedagem ou WhatsApp. O saldo e a cobrança oficial são consultados pelo link da OpenAI na tela.
+
+## Mensagens de áudio
+
+Em Testar atendimento, grave com o microfone (até 2 minutos) ou anexe MP3, M4A/MP4, WAV, OGG, FLAC ou WebM (até 8 MB). Ouça a prévia e envie. A rota autenticada `/api/transcribe` transcreve com `gpt-4o-mini-transcribe`; o texto segue para o mesmo chat e a resposta aparece por escrito. O áudio não é persistido pelo aplicativo; é enviado à OpenAI somente ao clicar em Enviar áudio. O navegador precisa permitir o microfone; anexos funcionam sem essa permissão.
+
+Transcrição e resposta reservam uma chamada cada, inclusive em falhas. Tokens de áudio são contabilizados separadamente e não entram na estimativa financeira de texto. O painel informa essa exclusão. A mesma chave do servidor atende a transcrição, sem expô-la ao navegador.
