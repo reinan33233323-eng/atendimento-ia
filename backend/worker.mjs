@@ -1,6 +1,7 @@
 import { ApiError, prepareRequest, askOpenAI } from './openai.mjs';
 import { MAX_AUDIO_BYTES, validateAudio, transcribeAudio } from './audio.mjs';
 import { estimateUsage } from './costs.mjs';
+import { WHATSAPP_WEBHOOK_PATH, whatsappTestConfig, handleWebhook } from './whatsapp.mjs';
 const limits = { perMinute: 5, perDay: 30, perMonth: 200 };
 const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...extra } });
 export async function matchesToken(provided, expected) {
@@ -10,10 +11,39 @@ export async function matchesToken(provided, expected) {
   let difference = 0; for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i];
   return difference === 0;
 }
+async function readBody(request, maxBytes) {
+  const reader = request.body?.getReader();
+  if (!reader) throw new ApiError(400, 'Corpo vazio.');
+  const chunks = [];
+  let bytes = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    bytes += value.length;
+    if (bytes > maxBytes) {
+      await reader.cancel();
+      throw new ApiError(413, 'Conteúdo muito grande.');
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return body;
+}
+
+const testEventsPath = '/whatsapp-test-events';
+const eventRetentionMs = 24 * 60 * 60 * 1000;
+const eventStorageKey = 'whatsapp-test-events';
+
 export class TestQuota {
   constructor(ctx) { this.ctx = ctx; }
   async fetch(request) {
     const action = new URL(request.url).pathname;
+    if (action === testEventsPath) return this.whatsappEvents(request);
     const usage = action === '/record' ? await request.json() : null;
     return this.ctx.storage.transaction(async transaction => {
       const now = new Date(), day = now.toISOString().slice(0, 10), month = day.slice(0, 7), minute = Math.floor(now.getTime() / 60000);
@@ -33,6 +63,27 @@ export class TestQuota {
       return json(state);
     });
   }
+
+  async whatsappEvents(request) {
+    const incoming = request.method === 'POST' ? await request.json() : [];
+    const cutoff = Date.now() - eventRetentionMs;
+    const events = await this.ctx.storage.transaction(async transaction => {
+      const stored = await transaction.get(eventStorageKey) || [];
+      const recent = stored.filter(event => Date.parse(event.receivedAt) >= cutoff);
+      const keys = new Set(recent.map(event => `${event.id}:${event.status}`));
+      for (const event of incoming) {
+        const key = `${event.id}:${event.status}`;
+        if (keys.has(key)) continue;
+        keys.add(key);
+        recent.push(event);
+      }
+      const result = recent.slice(-30);
+      if (request.method === 'POST' || result.length !== stored.length) await transaction.put(eventStorageKey, result);
+      return result;
+    });
+    return json({ events: events.map(({ kind, status, errorCode, receivedAt }) => ({ kind, status, errorCode, receivedAt })) });
+  }
+
 }
 export default {
   async fetch(request, env) {
@@ -42,11 +93,23 @@ export default {
     try {
       if (origin && !allowed) throw new ApiError(403, 'Origem não permitida.');
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+      const path = new URL(request.url).pathname;
+      const testStorage = () => env.QUOTA.get(env.QUOTA.idFromName('whatsapp-test'));
+      if (path === WHATSAPP_WEBHOOK_PATH) {
+        return await handleWebhook(request, whatsappTestConfig(env), async events => {
+          const result = await testStorage().fetch('https://quota' + testEventsPath, { method: 'POST', body: JSON.stringify(events) });
+          if (!result.ok) throw new ApiError(503, 'Não foi possível registrar o evento.');
+        }, matchesToken, readBody);
+      }
       if (!env.OPENAI_API_KEY || !env.PANEL_ACCESS_TOKEN || !env.QUOTA) throw new ApiError(503, 'Servidor aguardando configuração dos segredos.');
       const token = request.headers.get('Authorization')?.replace(/^Bearer /, '') || '';
       if (token.length > 256 || !await matchesToken(token, env.PANEL_ACCESS_TOKEN)) throw new ApiError(401, 'Informe o código de acesso do atendimento.');
+      if (path === '/api/whatsapp/test-events' && request.method === 'GET') {
+        const result = await testStorage().fetch('https://quota' + testEventsPath);
+        if (!result.ok) throw new ApiError(503, 'Não foi possível consultar os eventos.');
+        return json({ configured: !!whatsappTestConfig(env), ...await result.json() }, 200, cors);
+      }
       const quota = env.QUOTA.get(env.QUOTA.idFromName('panel'));
-      const path = new URL(request.url).pathname;
       if (path === '/api/status' && request.method === 'GET') {
         const usage = await (await quota.fetch('https://quota/status')).json();
         return json({ configured: true, mode: 'online', model: env.OPENAI_MODEL, limits, usage, estimate: estimateUsage(usage, env.OPENAI_MODEL) }, 200, cors);
@@ -56,10 +119,7 @@ export default {
       if (request.method !== 'POST') throw new ApiError(405, 'Método não permitido.');
       if (audio) validateAudio(request.headers.get('Content-Type'), 1);
       if (!audio && !(request.headers.get('Content-Type') || '').startsWith('application/json')) throw new ApiError(415, 'Envie o conteúdo em JSON.');
-      const reader = request.body?.getReader(); if (!reader) throw new ApiError(400, 'Corpo vazio.');
-      let bytes = 0; const chunks = [];
-      for (;;) { const { value, done } = await reader.read(); if (done) break; bytes += value.length; if (bytes > (audio ? MAX_AUDIO_BYTES : 100000)) { await reader.cancel(); throw new ApiError(413, 'Conteúdo muito grande.'); } chunks.push(value); }
-      const merged = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+      const merged = await readBody(request, audio ? MAX_AUDIO_BYTES : 100000);
       if (audio) {
         validateAudio(request.headers.get('Content-Type'), merged.byteLength);
         const reservation = await quota.fetch('https://quota/reserve', { method: 'POST' });
